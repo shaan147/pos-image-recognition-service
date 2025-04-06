@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 from pymongo import MongoClient
 from fuzzywuzzy import fuzz
+from src.config.database import db_connection  # Use the shared connection
 
 class RecognitionEngine:
     def __init__(self, mongodb_uri, database_name):
@@ -13,10 +14,16 @@ class RecognitionEngine:
             mongodb_uri (str): MongoDB connection string
             database_name (str): Name of the database
         """
-        self.client = MongoClient(mongodb_uri)
-        self.db = self.client[database_name]
+        # Check if Tesseract is installed
+        try:
+            pytesseract.get_tesseract_version()
+        except Exception as e:
+            raise RuntimeError(f"Tesseract OCR is not properly installed or configured: {str(e)}")
+        
+        # Use the shared database connection instead of creating a new one
+        self.db = db_connection.database
         self.products_collection = self.db['products']
-    
+                
     def preprocess_image(self, image_path):
         """
         Preprocess image for better OCR recognition
@@ -51,20 +58,27 @@ class RecognitionEngine:
         Returns:
             numpy.ndarray: Deskewed image
         """
-        coords = np.column_stack(np.where(image > 0))
-        angle = cv2.minAreaRect(coords)[-1]
-        
-        if angle < -45:
-            angle = -(90 + angle)
-        else:
-            angle = -angle
-        
-        (h, w) = image.shape[:2]
-        center = (w // 2, h // 2)
-        M = cv2.getRotationMatrix2D(center, angle, 1.0)
-        rotated = cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
-        
-        return rotated
+        try:
+            coords = np.column_stack(np.where(image > 0))
+            if coords.size == 0:  # Check if coords is empty
+                return image  # Return original image if no points found
+            
+            angle = cv2.minAreaRect(coords)[-1]
+            
+            if angle < -45:
+                angle = -(90 + angle)
+            else:
+                angle = -angle
+            
+            (h, w) = image.shape[:2]
+            center = (w // 2, h // 2)
+            M = cv2.getRotationMatrix2D(center, angle, 1.0)
+            rotated = cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+            
+            return rotated
+        except Exception as e:
+            print(f"Error in deskewing: {str(e)}")
+            return image  # Return original image on error
     
     def extract_text(self, image_path):
         """
